@@ -946,55 +946,319 @@ const SpreadApp = (() => {
     }
   }
 
+  // ==========================================================================
+  // IBKR Activity Flex (OpenPositions + Trades) Reconstruction Helpers
+  // ==========================================================================
+  function ibkrDateToIso(d) {
+    if (!d) return '';
+    if (d.length === 8 && !d.includes('/')) {
+      return `${d.substr(0,4)}-${d.substr(4,2)}-${d.substr(6,2)}`;
+    }
+    const parts = d.split('/');
+    if (parts.length !== 3) return '';
+    const [dd, mm, yyyy] = parts;
+    return `${yyyy}-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`;
+  }
+
+  function widthFieldValue(width) {
+    if (width === 5) return '5';
+    if (width === 10) return '10';
+    return 'custom';
+  }
+
+  function classifyExitReason(credit, exitPrice) {
+    if (exitPrice <= 0.01) return 'EXPIRED_MAX_PROFIT';
+    if (credit > 0 && exitPrice <= credit * 0.20 + 0.005) return 'BUYBACK_80_PERCENT';
+    return 'MANUAL_CLOSE';
+  }
+
+  function weightedAvgPrice(execs) {
+    let totalQty = 0, totalNotional = 0;
+    execs.forEach(e => {
+      const qty = Math.abs(parseFloat(e.getAttribute('quantity')) || 0);
+      const price = parseFloat(e.getAttribute('tradePrice')) || 0;
+      totalQty += qty;
+      totalNotional += qty * price;
+    });
+    return totalQty > 0 ? totalNotional / totalQty : 0;
+  }
+
+  function findOpenDateForConid(conid, tradeNodes) {
+    const opens = tradeNodes.filter(n => n.getAttribute('conid') === conid && n.getAttribute('openCloseIndicator') === 'O');
+    if (opens.length === 0) return null;
+    const dates = opens.map(n => n.getAttribute('tradeDate')).filter(Boolean).sort();
+    return ibkrDateToIso(dates[0]);
+  }
+
+  // Reconstructs currently-OPEN trades from <OpenPosition> rows (pairs short/long legs into
+  // PCS/CCS spreads, treats an unpaired naked short put as a CSP; skips anything else unsupported).
+  function buildOpenTradesFromPositions(openPositionNodes, tradeNodes) {
+    const optPositions = openPositionNodes.filter(n => n.getAttribute('assetCategory') === 'OPT');
+    const groups = {};
+    optPositions.forEach(n => {
+      const key = `${n.getAttribute('underlyingSymbol')}_${n.getAttribute('expiry')}_${n.getAttribute('putCall')}`;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(n);
+    });
+
+    const trades = [];
+    let skipped = 0;
+
+    Object.values(groups).forEach(legs => {
+      const shorts = legs.filter(n => parseFloat(n.getAttribute('position')) < 0);
+      const longs = legs.filter(n => parseFloat(n.getAttribute('position')) > 0);
+
+      if (shorts.length === 1 && longs.length === 1 &&
+          Math.abs(parseFloat(shorts[0].getAttribute('position'))) === Math.abs(parseFloat(longs[0].getAttribute('position')))) {
+        const shortLeg = shorts[0], longLeg = longs[0];
+        const strategy = shortLeg.getAttribute('putCall') === 'P' ? 'PCS' : 'CCS';
+        const shortStrike = parseFloat(shortLeg.getAttribute('strike'));
+        const longStrike = parseFloat(longLeg.getAttribute('strike'));
+        const contracts = Math.round(Math.abs(parseFloat(shortLeg.getAttribute('position'))));
+        const credit = Math.max(0, parseFloat((parseFloat(shortLeg.getAttribute('openPrice')) - parseFloat(longLeg.getAttribute('openPrice'))).toFixed(2)));
+        const width = Math.abs(shortStrike - longStrike);
+        const { totalCollateral, exitTargetPrice } = calcTradeMetrics(strategy, widthFieldValue(width), shortStrike, longStrike, credit, contracts);
+        const openDate = findOpenDateForConid(shortLeg.getAttribute('conid'), tradeNodes) ||
+                          findOpenDateForConid(longLeg.getAttribute('conid'), tradeNodes) ||
+                          ibkrDateToIso(shortLeg.getAttribute('reportDate'));
+
+        trades.push({
+          id: 'trade_ibkr_' + shortLeg.getAttribute('conid') + '_' + longLeg.getAttribute('conid'),
+          account: state.account,
+          ticker: shortLeg.getAttribute('underlyingSymbol'),
+          strategy, width: widthFieldValue(width), shortStrike, longStrike, contracts, credit,
+          openDate, expDate: ibkrDateToIso(shortLeg.getAttribute('expiry')),
+          status: 'OPEN', collateral: totalCollateral, exitTargetPrice
+        });
+      } else if (shorts.length === 1 && longs.length === 0 && shorts[0].getAttribute('putCall') === 'P') {
+        const leg = shorts[0];
+        const strike = parseFloat(leg.getAttribute('strike'));
+        const contracts = Math.round(Math.abs(parseFloat(leg.getAttribute('position'))));
+        const credit = parseFloat(parseFloat(leg.getAttribute('openPrice')).toFixed(2));
+        const { totalCollateral, exitTargetPrice } = calcTradeMetrics('CSP', 'custom', strike, 0, credit, contracts);
+        const openDate = findOpenDateForConid(leg.getAttribute('conid'), tradeNodes) || ibkrDateToIso(leg.getAttribute('reportDate'));
+
+        trades.push({
+          id: 'trade_ibkr_' + leg.getAttribute('conid'),
+          account: state.account,
+          ticker: leg.getAttribute('underlyingSymbol'),
+          strategy: 'CSP', width: 'custom', shortStrike: strike, longStrike: 0, contracts, credit,
+          openDate, expDate: ibkrDateToIso(leg.getAttribute('expiry')),
+          status: 'OPEN', collateral: totalCollateral, exitTargetPrice
+        });
+      } else {
+        skipped += legs.length;
+      }
+    });
+
+    return { trades, skipped };
+  }
+
+  // Reconstructs CLOSED trades by grouping raw <Trade> executions per option contract (conid),
+  // keeping only contracts whose net quantity nets to zero (fully closed) within this file,
+  // then pairing opposite-side legs opened the same day into PCS/CCS spreads (or a lone
+  // closed short put into a CSP). Uses the app's own credit/exit-price P&L formula for
+  // consistency with manually-logged trades rather than IBKR's fee-inclusive realized P&L.
+  function buildClosedTradesFromExecutions(tradeNodes, openPositionNodes) {
+    const openConids = new Set(openPositionNodes.map(n => n.getAttribute('conid')));
+    const optNodes = tradeNodes.filter(n => n.getAttribute('assetCategory') === 'OPT' && !openConids.has(n.getAttribute('conid')));
+
+    const byConid = {};
+    optNodes.forEach(n => {
+      const conid = n.getAttribute('conid');
+      if (!byConid[conid]) byConid[conid] = [];
+      byConid[conid].push(n);
+    });
+
+    const legGroups = [];
+    Object.values(byConid).forEach(execs => {
+      const netQty = execs.reduce((sum, e) => sum + (parseFloat(e.getAttribute('quantity')) || 0), 0);
+      if (Math.abs(netQty) > 0.001) return;
+
+      const opens = execs.filter(e => e.getAttribute('openCloseIndicator') === 'O');
+      const closes = execs.filter(e => e.getAttribute('openCloseIndicator') === 'C');
+      if (opens.length === 0 || closes.length === 0) return;
+
+      const first = execs[0];
+      const openQty = opens.reduce((s, e) => s + (parseFloat(e.getAttribute('quantity')) || 0), 0);
+      const openDates = opens.map(e => e.getAttribute('tradeDate')).filter(Boolean).sort();
+      const closeDates = closes.map(e => e.getAttribute('tradeDate')).filter(Boolean).sort();
+
+      legGroups.push({
+        conid: first.getAttribute('conid'),
+        underlyingSymbol: first.getAttribute('underlyingSymbol'),
+        strike: parseFloat(first.getAttribute('strike')),
+        putCall: first.getAttribute('putCall'),
+        expiry: first.getAttribute('expiry'),
+        side: openQty < 0 ? 'Short' : 'Long',
+        contracts: Math.round(Math.abs(openQty)),
+        openPrice: weightedAvgPrice(opens),
+        closePrice: weightedAvgPrice(closes),
+        openDate: openDates[0],
+        closeDate: closeDates[closeDates.length - 1]
+      });
+    });
+
+    const used = new Set();
+    const trades = [];
+    let skipped = 0;
+
+    // Pass 1: pair every Short leg with an available Long leg (same underlying/expiry/
+    // putCall/contracts/openDate) into a closed spread. Runs over all Short legs before
+    // any leg is marked "used", so a Long leg occurring earlier in document order is still
+    // available to a Short leg discovered later.
+    for (let i = 0; i < legGroups.length; i++) {
+      const a = legGroups[i];
+      if (a.side !== 'Short' || used.has(i)) continue;
+
+      let matchIdx = -1;
+      for (let j = 0; j < legGroups.length; j++) {
+        if (used.has(j) || j === i) continue;
+        const b = legGroups[j];
+        if (b.side === 'Long' && b.underlyingSymbol === a.underlyingSymbol &&
+            b.expiry === a.expiry && b.putCall === a.putCall &&
+            b.contracts === a.contracts && b.openDate === a.openDate) {
+          matchIdx = j;
+          break;
+        }
+      }
+
+      if (matchIdx < 0) continue;
+      const b = legGroups[matchIdx];
+      used.add(i); used.add(matchIdx);
+
+      const strategy = a.putCall === 'P' ? 'PCS' : 'CCS';
+      const shortStrike = a.strike, longStrike = b.strike;
+      const width = Math.abs(shortStrike - longStrike);
+      const credit = Math.max(0, parseFloat((a.openPrice - b.openPrice).toFixed(2)));
+      const exitPrice = Math.max(0, parseFloat((a.closePrice - b.closePrice).toFixed(2)));
+      const contracts = a.contracts;
+      const { totalCollateral } = calcTradeMetrics(strategy, widthFieldValue(width), shortStrike, longStrike, credit, contracts);
+      const netPnL = parseFloat(((credit - exitPrice) * 100 * contracts).toFixed(2));
+      const roc = parseFloat(((netPnL / (totalCollateral || 1)) * 100).toFixed(1));
+      const closeDate = a.closeDate > b.closeDate ? a.closeDate : b.closeDate;
+
+      trades.push({
+        id: 'trade_ibkr_' + a.conid + '_' + b.conid,
+        account: state.account,
+        ticker: a.underlyingSymbol,
+        strategy, width: widthFieldValue(width), shortStrike, longStrike, contracts, credit,
+        openDate: ibkrDateToIso(a.openDate), expDate: ibkrDateToIso(a.expiry),
+        status: 'CLOSED', closeDate: ibkrDateToIso(closeDate),
+        exitPrice, exitReason: classifyExitReason(credit, exitPrice),
+        realizedPnL: netPnL, collateral: totalCollateral, roc
+      });
+    }
+
+    // Pass 2: anything left unpaired — a lone short put becomes a closed CSP,
+    // everything else (unpaired long legs, naked short calls, etc.) is unsupported.
+    for (let i = 0; i < legGroups.length; i++) {
+      if (used.has(i)) continue;
+      const a = legGroups[i];
+      used.add(i);
+
+      if (a.side === 'Short' && a.putCall === 'P') {
+        const credit = parseFloat(a.openPrice.toFixed(2));
+        const exitPrice = parseFloat(a.closePrice.toFixed(2));
+        const contracts = a.contracts;
+        const { totalCollateral } = calcTradeMetrics('CSP', 'custom', a.strike, 0, credit, contracts);
+        const netPnL = parseFloat(((credit - exitPrice) * 100 * contracts).toFixed(2));
+        const roc = parseFloat(((netPnL / (totalCollateral || 1)) * 100).toFixed(1));
+
+        trades.push({
+          id: 'trade_ibkr_' + a.conid,
+          account: state.account,
+          ticker: a.underlyingSymbol,
+          strategy: 'CSP', width: 'custom', shortStrike: a.strike, longStrike: 0, contracts, credit,
+          openDate: ibkrDateToIso(a.openDate), expDate: ibkrDateToIso(a.expiry),
+          status: 'CLOSED', closeDate: ibkrDateToIso(a.closeDate),
+          exitPrice, exitReason: classifyExitReason(credit, exitPrice),
+          realizedPnL: netPnL, collateral: totalCollateral, roc
+        });
+        continue;
+      }
+
+      skipped++;
+    }
+
+    return { trades, skipped };
+  }
+
   // XML & Text Executions Parser Helper
   async function parseAndImportXmlText(xmlOrText) {
-    if (xmlOrText.includes('<?xml') || xmlOrText.includes('<FlexStatement')) {
+    if (xmlOrText.includes('<?xml') || xmlOrText.includes('<FlexStatement') || xmlOrText.includes('<FlexQueryResponse')) {
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(xmlOrText, "text/xml");
-      const tradeConfirms = xmlDoc.querySelectorAll('TradeConfirm, TradeConfirmation, Trade');
 
-      if (!tradeConfirms || tradeConfirms.length === 0) {
-        alert(`IBKR Connected Successfully!\n\nNote: No new filled option trades were found in the selected date range.`);
+      const openPositionNodes = Array.from(xmlDoc.querySelectorAll('OpenPosition'));
+      const tradeNodes = Array.from(xmlDoc.querySelectorAll('Trade'));
+      const tradeConfirmNodes = Array.from(xmlDoc.querySelectorAll('TradeConfirm, TradeConfirmation'));
+
+      let importedCount = 0;
+      let skippedCount = 0;
+
+      const upsertTrade = async (t) => {
+        await saveTradeToDb(t);
+        const idx = state.trades.findIndex(x => x.id === t.id);
+        if (idx >= 0) state.trades[idx] = t; else state.trades.push(t);
+        importedCount++;
+      };
+
+      // Activity Flex format: reconstruct from OpenPositions + raw Trade executions
+      if (openPositionNodes.length > 0 || tradeNodes.some(n => n.getAttribute('openCloseIndicator'))) {
+        const openResult = buildOpenTradesFromPositions(openPositionNodes, tradeNodes);
+        const closedResult = buildClosedTradesFromExecutions(tradeNodes, openPositionNodes);
+        skippedCount += openResult.skipped + closedResult.skipped;
+
+        for (const t of [...openResult.trades, ...closedResult.trades]) {
+          await upsertTrade(t);
+        }
+      }
+
+      // Trade Confirmation format: simple one-row-per-fill legacy handling
+      if (tradeConfirmNodes.length > 0) {
+        for (let tNode of tradeConfirmNodes) {
+          const symbol = tNode.getAttribute('symbol') || tNode.getAttribute('underlyingSymbol') || 'SPY';
+          const price = Math.abs(parseFloat(tNode.getAttribute('price') || tNode.getAttribute('tradePrice') || '1.00'));
+          const quantity = Math.abs(parseInt(tNode.getAttribute('quantity') || '1'));
+          const strike = parseFloat(tNode.getAttribute('strike') || '500');
+          const buySell = tNode.getAttribute('buySell') || 'SELL';
+          const expDateRaw = tNode.getAttribute('expiry') || tNode.getAttribute('expiration') || '';
+
+          let expDate = getFutureDateStr(30);
+          if (expDateRaw && expDateRaw.length === 8) {
+            expDate = `${expDateRaw.substr(0,4)}-${expDateRaw.substr(4,2)}-${expDateRaw.substr(6,2)}`;
+          } else if (expDateRaw && expDateRaw.includes('/')) {
+            expDate = ibkrDateToIso(expDateRaw);
+          }
+
+          const newTrade = {
+            id: 'trade_ibkr_' + (tNode.getAttribute('transactionID') || (Date.now() + '_' + Math.random().toString(36).substr(2,4))),
+            account: state.account,
+            ticker: symbol.toUpperCase(),
+            strategy: buySell.includes('SELL') ? 'PCS' : 'CCS',
+            width: '5',
+            shortStrike: strike,
+            longStrike: strike - 5,
+            contracts: quantity,
+            credit: price,
+            openDate: new Date().toISOString().split('T')[0],
+            expDate: expDate,
+            status: 'OPEN',
+            collateral: Math.max(100, (500 - (price * 100)) * quantity),
+            exitTargetPrice: (price * 0.20).toFixed(2)
+          };
+
+          await upsertTrade(newTrade);
+        }
+      }
+
+      if (importedCount === 0) {
+        alert(`IBKR Connected Successfully!\n\nNote: No new recognizable option trades were found in the selected date range.`);
         return 0;
       }
 
-      let importedCount = 0;
-      for (let tNode of tradeConfirms) {
-        const symbol = tNode.getAttribute('symbol') || tNode.getAttribute('underlyingSymbol') || 'SPY';
-        const price = Math.abs(parseFloat(tNode.getAttribute('price') || tNode.getAttribute('tradePrice') || '1.00'));
-        const quantity = Math.abs(parseInt(tNode.getAttribute('quantity') || '1'));
-        const strike = parseFloat(tNode.getAttribute('strike') || '500');
-        const buySell = tNode.getAttribute('buySell') || 'SELL';
-        const expDateRaw = tNode.getAttribute('expiry') || tNode.getAttribute('expiration') || '';
-
-        let expDate = getFutureDateStr(30);
-        if (expDateRaw && expDateRaw.length === 8) {
-          expDate = `${expDateRaw.substr(0,4)}-${expDateRaw.substr(4,2)}-${expDateRaw.substr(6,2)}`;
-        }
-
-        const newTrade = {
-          id: 'trade_ibkr_' + Date.now() + '_' + Math.random().toString(36).substr(2,4),
-          account: state.account,
-          ticker: symbol.toUpperCase(),
-          strategy: buySell.includes('SELL') ? 'PCS' : 'CCS',
-          width: '5',
-          shortStrike: strike,
-          longStrike: strike - 5,
-          contracts: quantity,
-          credit: price,
-          openDate: new Date().toISOString().split('T')[0],
-          expDate: expDate,
-          status: 'OPEN',
-          collateral: Math.max(100, (500 - (price * 100)) * quantity),
-          exitTargetPrice: (price * 0.20).toFixed(2)
-        };
-
-        await saveTradeToDb(newTrade);
-        state.trades.push(newTrade);
-        importedCount++;
-      }
-
-      alert(`🎉 SUCCESS! Imported ${importedCount} trade(s) directly from IBKR!`);
+      alert(`🎉 SUCCESS! Imported ${importedCount} trade(s) from IBKR!${skippedCount > 0 ? `\n\n(${skippedCount} other position/execution row(s) were skipped — not a supported PCS/CCS/CSP shape, e.g. naked long options, uncovered calls, or stock.)` : ''}`);
       render();
       return importedCount;
     } else {
