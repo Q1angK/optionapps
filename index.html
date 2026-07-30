@@ -388,44 +388,52 @@
     </div>
   </div>
 
-  <!-- MODAL 2: IBKR Sync & CSV Importer Modal -->
+  <!-- MODAL 2: IBKR Sync & Importer Modal -->
   <div class="modal-overlay" id="ibkrModal">
     <div class="modal-card">
       <div class="modal-header">
-        <h2><i data-lucide="refresh-cw"></i> IBKR Flex API & CSV Importer</h2>
+        <h2><i data-lucide="refresh-cw"></i> IBKR Flex XML / Trade Importer</h2>
         <button class="modal-close" onclick="SpreadApp.closeModal('ibkrModal')">&times;</button>
       </div>
       
       <div class="importer-tabs">
-        <button class="tab-btn active" id="btnIbkrTabApi" onclick="SpreadApp.switchIbkrTab('api')">IBKR Flex API Token</button>
-        <button class="tab-btn" id="btnIbkrTabCsv" onclick="SpreadApp.switchIbkrTab('csv')">CSV / Text Import</button>
+        <button class="tab-btn active" id="btnIbkrTabFile" onclick="SpreadApp.switchIbkrTab('file')">📁 Drop / Select IBKR File</button>
+        <button class="tab-btn" id="btnIbkrTabApi" onclick="SpreadApp.switchIbkrTab('api')">⚡ Flex API Token</button>
       </div>
 
-      <!-- API Tab -->
-      <div class="importer-panel active" id="panelIbkrApi">
-        <p class="form-help">Enter your free <strong>IBKR Flex Web Service Token</strong> & <strong>Query ID</strong> from IBKR Account Management to sync trades automatically.</p>
+      <!-- File / XML Paste Tab (100% Reliable, Zero CORS Error) -->
+      <div class="importer-panel active" id="panelIbkrFile">
+        <p class="form-help">In IBKR, click <strong>"Run"</strong> next to your Flex Query ➔ Drag & drop or select your downloaded <strong>XML / CSV file</strong> (or paste text below).</p>
+        
+        <div class="drop-zone-box" onclick="document.getElementById('ibkrFileInput').click()">
+          <i data-lucide="file-up" style="width:36px;height:36px;color:var(--indigo-primary);margin-bottom:8px;"></i>
+          <span style="font-weight:600;">Click to select IBKR XML / CSV File</span>
+          <span style="font-size:11px;color:var(--text-subtle);margin-top:4px;">Or drag and drop your report file here</span>
+          <input type="file" id="ibkrFileInput" accept=".xml,.csv,.txt" style="display:none;" onchange="SpreadApp.handleIbkrFileSelect(event)">
+        </div>
+
+        <div class="form-group" style="margin-top:14px;">
+          <label>Or Paste IBKR XML / Execution Text</label>
+          <textarea id="ibkrPasteArea" rows="4" placeholder="Paste IBKR XML statement or text here..."></textarea>
+        </div>
+        <button class="btn btn-primary full-width" onclick="SpreadApp.importIbkrText()">
+          Parse & Import Trades
+        </button>
+      </div>
+
+      <!-- API Token Tab -->
+      <div class="importer-panel" id="panelIbkrApi">
+        <p class="form-help">Enter your <strong>IBKR Flex Token</strong> & <strong>Query ID</strong>. <em>(Note: IBKR restricts direct browser API access; if blocked by Cloudflare, use the File Drop tab!)</em></p>
         <div class="form-group">
           <label>IBKR Flex Token</label>
           <input type="password" id="ibkrToken" placeholder="Paste IBKR Flex Token...">
         </div>
         <div class="form-group">
           <label>Flex Query ID</label>
-          <input type="text" id="ibkrQueryId" placeholder="e.g. 123456">
+          <input type="text" id="ibkrQueryId" placeholder="e.g. 1587959">
         </div>
         <button class="btn btn-primary full-width" onclick="SpreadApp.syncIbkrApi()">
-          <i data-lucide="cloud-download"></i> Sync Trades from Interactive Brokers
-        </button>
-      </div>
-
-      <!-- CSV / Text Tab -->
-      <div class="importer-panel" id="panelIbkrCsv">
-        <p class="form-help">Paste IBKR execution confirmation text or import an IBKR CSV report.</p>
-        <div class="form-group">
-          <label>Paste Trade Execution Text</label>
-          <textarea id="ibkrPasteArea" rows="5" placeholder="BOT 1 SPY 100 20 SEP 26 500 PUT / SOLD 1 SPY 100 20 SEP 26 495 PUT @ 1.20"></textarea>
-        </div>
-        <button class="btn btn-primary full-width" onclick="SpreadApp.importIbkrText()">
-          Parse & Import Executions
+          Fetch via Flex API
         </button>
       </div>
     </div>

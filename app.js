@@ -832,41 +832,45 @@ const SpreadApp = (() => {
   }
 
   // ==========================================================================
-  // IBKR Flex API Sync (Multi-Proxy Fallback Engine & 2-Step Handshake)
+  // IBKR Flex API Sync (Bypassing CORS via JSONP Proxy & XML Reader)
   // ==========================================================================
   function switchIbkrTab(tab) {
     document.querySelectorAll('.importer-tabs .tab-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.importer-panel').forEach(p => p.classList.remove('active'));
 
-    if (tab === 'api') {
-      document.getElementById('btnIbkrTabApi').classList.add('active');
-      document.getElementById('panelIbkrApi').classList.add('active');
-    } else {
-      document.getElementById('btnIbkrTabCsv').classList.add('active');
-      document.getElementById('panelIbkrCsv').classList.add('active');
+    if (tab === 'file') {
+      if (document.getElementById('btnIbkrTabFile')) document.getElementById('btnIbkrTabFile').classList.add('active');
+      if (document.getElementById('panelIbkrFile')) document.getElementById('panelIbkrFile').classList.add('active');
+    } else if (tab === 'api') {
+      if (document.getElementById('btnIbkrTabApi')) document.getElementById('btnIbkrTabApi').classList.add('active');
+      if (document.getElementById('panelIbkrApi')) document.getElementById('panelIbkrApi').classList.add('active');
     }
   }
 
-  // Multi-Proxy Fetch Helper
-  async function fetchWithProxy(targetUrl) {
-    const proxies = [
-      `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
-      `https://thingproxy.freeboard.io/fetch/${targetUrl}`
-    ];
+  function handleIbkrFileSelect(e) {
+    const file = e.target.files[0];
+    if (!file) return;
 
-    for (let proxy of proxies) {
-      try {
-        const res = await fetch(proxy, { timeout: 8000 });
-        if (res.ok) {
-          const text = await res.text();
-          if (text && text.includes('<?xml')) return text;
-        }
-      } catch (err) {
-        console.warn('Proxy attempt failed, trying next:', proxy, err);
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      const content = evt.target.result;
+      if (content) {
+        await parseAndImportXmlText(content);
+        closeModal('ibkrModal');
       }
-    }
-    throw new Error('All CORS proxies failed or blocked.');
+    };
+    reader.readAsText(file);
+  }
+
+
+  // Smart AllOrigins JSONP Proxy Fetcher (Bypasses Cloudflare & CORS 403 Forbidden)
+  async function fetchAllOriginsXml(targetUrl) {
+    const jsonpUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`;
+    const res = await fetch(jsonpUrl);
+    if (!res.ok) throw new Error('Proxy connection failed');
+    const data = await res.json();
+    if (!data || !data.contents) throw new Error('No data received from proxy');
+    return data.contents;
   }
 
   async function syncIbkrApi() {
@@ -881,7 +885,6 @@ const SpreadApp = (() => {
       return;
     }
 
-    // Save credentials to localStorage
     localStorage.setItem('ibkr_token', token);
     localStorage.setItem('ibkr_query_id', queryId);
 
@@ -889,14 +892,14 @@ const SpreadApp = (() => {
     const origText = btn ? btn.innerHTML : 'Sync Trades';
     
     if (btn) {
-      btn.innerHTML = '⚡ Step 1/3: Requesting IBKR Token Auth...';
+      btn.innerHTML = '⚡ Step 1/3: Authenticating Token with IBKR...';
       btn.disabled = true;
     }
 
     try {
       // Step 1: Send Request to IBKR Flex Web Service
       const reqUrl = `https://www.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest?t=${token}&q=${queryId}&v=3`;
-      const text1 = await fetchWithProxy(reqUrl);
+      const text1 = await fetchAllOriginsXml(reqUrl);
 
       const parser = new DOMParser();
       const xml1 = parser.parseFromString(text1, "text/xml");
@@ -918,25 +921,41 @@ const SpreadApp = (() => {
         return;
       }
 
-      if (btn) btn.innerHTML = '⏳ Step 2/3: IBKR Generating Statement (Waiting 3s)...';
+      if (btn) btn.innerHTML = '⏳ Step 2/3: IBKR Generating Report (Waiting 3s)...';
 
       // Step 2: Wait 3 seconds for IBKR report generation
       await new Promise(r => setTimeout(r, 3000));
 
-      if (btn) btn.innerHTML = '📥 Step 3/3: Downloading Executions & Strikes...';
+      if (btn) btn.innerHTML = '📥 Step 3/3: Parsing Executions & Option Strikes...';
 
       // Step 3: Fetch Statement via Reference Code
       const stmtUrl = `https://www.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement?q=${refCode}&t=${token}&v=3`;
-      const text2 = await fetchWithProxy(stmtUrl);
+      const text2 = await fetchAllOriginsXml(stmtUrl);
 
-      const xml2 = parser.parseFromString(text2, "text/xml");
-      const tradeConfirms = xml2.querySelectorAll('TradeConfirm, TradeConfirmation, Trade');
+      parseAndImportXmlText(text2);
+      closeModal('ibkrModal');
+
+    } catch (err) {
+      console.error('IBKR API Fetch Error:', err);
+      alert(`💡 IBKR Direct Connect Note:\n\nDirect browser API connections can be restricted by your browser. Please switch to the "CSV / Text Import" tab right next to this button to import your IBKR trade report XML or CSV file in 1 click!`);
+    } finally {
+      if (btn) {
+        btn.innerHTML = origText;
+        btn.disabled = false;
+      }
+    }
+  }
+
+  // XML & Text Executions Parser Helper
+  async function parseAndImportXmlText(xmlOrText) {
+    if (xmlOrText.includes('<?xml') || xmlOrText.includes('<FlexStatement')) {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(xmlOrText, "text/xml");
+      const tradeConfirms = xmlDoc.querySelectorAll('TradeConfirm, TradeConfirmation, Trade');
 
       if (!tradeConfirms || tradeConfirms.length === 0) {
-        alert(`✅ IBKR Flex Query Connected Successfully!\n\nNote: No new filled option trades were found in the selected date range.`);
-        if (btn) { btn.innerHTML = origText; btn.disabled = false; }
-        closeModal('ibkrModal');
-        return;
+        alert(`IBKR Connected Successfully!\n\nNote: No new filled option trades were found in the selected date range.`);
+        return 0;
       }
 
       let importedCount = 0;
@@ -975,28 +994,25 @@ const SpreadApp = (() => {
         importedCount++;
       }
 
-      alert(`🎉 SUCCESS! Imported ${importedCount} trade(s) directly from Interactive Brokers!`);
+      alert(`🎉 SUCCESS! Imported ${importedCount} trade(s) directly from IBKR!`);
       render();
-      closeModal('ibkrModal');
-
-    } catch (err) {
-      console.error('IBKR API Fetch Error:', err);
-      alert(`💡 IBKR Flex Connection Note:\n\nYour browser or network blocked the CORS API request. Please use the "CSV / Text Import" tab right next to this button to import your IBKR trade report in 1 click!`);
-    } finally {
-      if (btn) {
-        btn.innerHTML = origText;
-        btn.disabled = false;
-      }
+      return importedCount;
+    } else {
+      return await importIbkrTextLines(xmlOrText);
     }
   }
 
   async function importIbkrText() {
     const text = document.getElementById('ibkrPasteArea').value.trim();
     if (!text) {
-      alert('Please paste IBKR execution confirmation text or CSV data.');
+      alert('Please paste IBKR execution text, XML report, or CSV data.');
       return;
     }
+    await parseAndImportXmlText(text);
+    closeModal('ibkrModal');
+  }
 
+  async function importIbkrTextLines(text) {
     const lines = text.split('\n');
     let importedCount = 0;
 
@@ -1035,7 +1051,7 @@ const SpreadApp = (() => {
 
     alert(`Successfully parsed and imported ${importedCount} trade execution(s)!`);
     render();
-    closeModal('ibkrModal');
+    return importedCount;
   }
 
   // ==========================================================================
@@ -1116,6 +1132,7 @@ const SpreadApp = (() => {
     calcPositionSizing,
     calcStressTest,
     switchIbkrTab,
+    handleIbkrFileSelect,
     syncIbkrApi,
     importIbkrText,
     saveSettings,

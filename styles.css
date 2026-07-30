@@ -1096,3 +1096,23 @@ body.dark-theme {
   display: flex;
   gap: 10px;
 }
+
+/* Drop Zone Box */
+.drop-zone-box {
+  background: var(--bg-dark);
+  border: 2px dashed var(--indigo-primary);
+  border-radius: var(--radius-md);
+  padding: 24px 16px;
+  text-align: center;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: var(--transition);
+}
+.drop-zone-box:hover {
+  background: var(--indigo-glow);
+  border-color: var(--emerald-green);
+}
+
