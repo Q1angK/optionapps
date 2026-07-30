@@ -127,6 +127,12 @@ const SpreadApp = (() => {
     const url = localStorage.getItem('spreadpulse_gscript');
     if (url) state.gscriptUrl = url;
 
+    // Prefill saved IBKR credentials if available
+    const savedToken = localStorage.getItem('ibkr_token');
+    const savedQueryId = localStorage.getItem('ibkr_query_id');
+    if (savedToken && document.getElementById('ibkrToken')) document.getElementById('ibkrToken').value = savedToken;
+    if (savedQueryId && document.getElementById('ibkrQueryId')) document.getElementById('ibkrQueryId').value = savedQueryId;
+
     document.getElementById('settingTotalCap').value = state.totalCapital;
     document.getElementById('settingGscriptUrl').value = state.gscriptUrl;
   }
@@ -159,11 +165,11 @@ const SpreadApp = (() => {
         shortStrike: 500,
         longStrike: 495,
         contracts: 3,
-        credit: 1.20, // $360 credit
+        credit: 1.20,
         openDate: getPastDateStr(14),
         expDate: getFutureDateStr(10),
         status: 'OPEN',
-        collateral: 1140, // (500 - 120) * 3 = $1140
+        collateral: 1140,
         exitTargetPrice: 0.24
       },
       {
@@ -175,15 +181,15 @@ const SpreadApp = (() => {
         shortStrike: 470,
         longStrike: 460,
         contracts: 2,
-        credit: 2.40, // $480 credit
+        credit: 2.40,
         openDate: getPastDateStr(25),
         expDate: getPastDateStr(2),
         closeDate: getPastDateStr(2),
         status: 'CLOSED',
-        exitPrice: 0.48, // Exited at 80% target!
+        exitPrice: 0.48,
         exitReason: 'BUYBACK_80_PERCENT',
-        realizedPnL: 384.00, // (2.40 - 0.48) * 100 * 2 = $384
-        collateral: 1520, // (1000 - 240) * 2 = $1520
+        realizedPnL: 384.00,
+        collateral: 1520,
         roc: 25.26
       },
       {
@@ -195,15 +201,15 @@ const SpreadApp = (() => {
         shortStrike: 110,
         longStrike: 0,
         contracts: 1,
-        credit: 2.10, // $210 credit
+        credit: 2.10,
         openDate: getPastDateStr(30),
         expDate: getPastDateStr(5),
         closeDate: getPastDateStr(5),
         status: 'CLOSED',
-        exitPrice: 0.00, // Expired OTM 100% profit
+        exitPrice: 0.00,
         exitReason: 'EXPIRED_MAX_PROFIT',
         realizedPnL: 210.00,
-        collateral: 10790, // (110 * 100) - 210 = 10,790
+        collateral: 10790,
         roc: 1.95
       },
       {
@@ -219,7 +225,7 @@ const SpreadApp = (() => {
         openDate: getPastDateStr(8),
         expDate: getFutureDateStr(18),
         status: 'OPEN',
-        collateral: 780, // (500 - 110) * 2 = $780
+        collateral: 780,
         exitTargetPrice: 0.22
       }
     ];
@@ -267,7 +273,7 @@ const SpreadApp = (() => {
     }
 
     const totalCollateral = Math.max(0, collateralPerContract * contracts);
-    const exitTargetPrice = (credit * 0.20).toFixed(2); // 80% profit = 20% credit left to buyback
+    const exitTargetPrice = (credit * 0.20).toFixed(2);
 
     return { maxProfit, totalCollateral, exitTargetPrice, widthVal };
   }
@@ -316,7 +322,6 @@ const SpreadApp = (() => {
   }
 
   function renderMetrics(activeTrades, closedTrades) {
-    // 1. Net Realized P&L
     let totalRealizedPnL = 0;
     let totalClosedCollateral = 0;
     let winsCount = 0;
@@ -324,7 +329,6 @@ const SpreadApp = (() => {
     let targetHitsCount = 0;
     let currentStreak = 0;
 
-    // Sort closed trades by date
     closedTrades.sort((a,b) => new Date(a.closeDate) - new Date(b.closeDate));
 
     closedTrades.forEach(t => {
@@ -349,7 +353,6 @@ const SpreadApp = (() => {
     const totalRoc = totalClosedCollateral > 0 ? ((totalRealizedPnL / totalClosedCollateral) * 100).toFixed(1) : '0.0';
     const targetEfficiency = winsCount > 0 ? ((targetHitsCount / winsCount) * 100).toFixed(1) : '0.0';
 
-    // 2. Active Capital
     let activeCapital = 0;
     activeTrades.forEach(t => {
       activeCapital += (t.collateral || 0);
@@ -358,7 +361,6 @@ const SpreadApp = (() => {
     const capLimit = state.totalCapital;
     const capUsagePct = Math.min(100, Math.round((activeCapital / capLimit) * 100));
 
-    // Update DOM
     const elPnl = document.getElementById('valNetPnL');
     elPnl.innerText = `$${totalRealizedPnL.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
     elPnl.className = `card-value ${totalRealizedPnL >= 0 ? 'positive' : 'negative'}`;
@@ -471,7 +473,6 @@ const SpreadApp = (() => {
   }
 
   function renderAnalytics(closedTrades) {
-    // 1. Strategy Efficiency Matrix
     const tbody = document.getElementById('tbodyMatrix');
     tbody.innerHTML = '';
 
@@ -492,9 +493,7 @@ const SpreadApp = (() => {
         if (pnl >= 0) wins++;
         rocSum += parseFloat(t.roc || 0);
 
-        // Comparator calculations
         totalRulePnL += pnl;
-        // Estimated hold P&L: if closed @ 80%, full max profit was credit * 100 * contracts
         if (t.exitReason === 'BUYBACK_80_PERCENT') {
           totalHoldEstPnL += (t.credit * 100 * t.contracts);
         } else {
@@ -516,18 +515,16 @@ const SpreadApp = (() => {
       tbody.appendChild(tr);
     });
 
-    // Update 80% vs Expiration Comparator
     document.getElementById('compValRule').innerText = `$${totalRulePnL.toFixed(2)}`;
     document.getElementById('compValHold').innerText = `$${totalHoldEstPnL.toFixed(2)}`;
 
-    // 2. Monthly Heatmap Generator
     const heatmapGrid = document.getElementById('heatmapGrid');
     heatmapGrid.innerHTML = '';
 
     const monthlyMap = {};
     closedTrades.forEach(t => {
       if (!t.closeDate) return;
-      const monthKey = t.closeDate.substring(0, 7); // YYYY-MM
+      const monthKey = t.closeDate.substring(0, 7);
       if (!monthlyMap[monthKey]) monthlyMap[monthKey] = 0;
       monthlyMap[monthKey] += (t.realizedPnL || 0);
     });
@@ -563,8 +560,6 @@ const SpreadApp = (() => {
       tips.push('💡 <strong>Welcome to SpreadPulse!</strong> Log your first $5/$10 spread or CSP to start receiving AI discipline coaching.');
     } else {
       const pcsTrades = closedTrades.filter(t => t.strategy === 'PCS');
-      const ccsTrades = closedTrades.filter(t => t.strategy === 'CCS');
-      const cspTrades = closedTrades.filter(t => t.strategy === 'CSP');
 
       if (pcsTrades.length > 0) {
         const pcsWins = pcsTrades.filter(t => t.realizedPnL >= 0).length;
@@ -701,12 +696,10 @@ const SpreadApp = (() => {
 
     await saveTradeToDb(tradeObj);
 
-    // Sync to state
     const idx = state.trades.findIndex(t => t.id === id);
     if (idx >= 0) state.trades[idx] = tradeObj;
     else state.trades.push(tradeObj);
 
-    // Optional Google Sheets sync
     if (state.gscriptUrl) {
       syncToGoogleSheets(tradeObj);
     }
@@ -716,7 +709,6 @@ const SpreadApp = (() => {
     document.getElementById('formTrade').reset();
   }
 
-  // Exit Action Handlers
   function openCloseModal(tradeId, exitMode) {
     const trade = state.trades.find(t => t.id === tradeId);
     if (!trade) return;
@@ -731,11 +723,11 @@ const SpreadApp = (() => {
     const exitReasonSelect = document.getElementById('closeExitReason');
 
     if (exitMode === 0.80) {
-      exitPriceInput.value = (trade.credit * 0.20).toFixed(2); // 80% profit = 20% cost left
+      exitPriceInput.value = (trade.credit * 0.20).toFixed(2);
       exitReasonSelect.value = 'BUYBACK_80_PERCENT';
       document.getElementById('closeExitHint').innerText = '🎯 Auto-filled @ 80% Profit Target ($0.20 per $1.00 credit)';
     } else if (exitMode === 1.00) {
-      exitPriceInput.value = '0.00'; // 100% max profit expiration
+      exitPriceInput.value = '0.00';
       exitReasonSelect.value = 'EXPIRED_MAX_PROFIT';
       document.getElementById('closeExitHint').innerText = '⌛ Auto-filled @ 100% Expiration ($0.00 buyback)';
     } else {
@@ -783,7 +775,6 @@ const SpreadApp = (() => {
 
     await saveTradeToDb(trade);
 
-    // Optional Google Sheets sync
     if (state.gscriptUrl) {
       syncToGoogleSheets(trade);
     }
@@ -800,12 +791,12 @@ const SpreadApp = (() => {
   }
 
   // ==========================================================================
-  // Sidebar Widgets: Position Sizing & Stress Testing
+  // Sidebar Widgets
   // ==========================================================================
   function calcPositionSizing() {
     const widthVal = document.getElementById('sizerWidth').value;
     const rowPrice = document.getElementById('rowSizerPrice');
-    let riskPerContract = 380; // Default $5 spread with $1.20 credit
+    let riskPerContract = 380;
 
     if (widthVal === '5') {
       rowPrice.style.display = 'none';
@@ -816,10 +807,10 @@ const SpreadApp = (() => {
     } else {
       rowPrice.style.display = 'block';
       const strike = parseFloat(document.getElementById('sizerStrikePrice').value) || 50;
-      riskPerContract = (strike * 100) * 0.95; // CSP collateral
+      riskPerContract = (strike * 100) * 0.95;
     }
 
-    const maxRiskAllowed = state.totalCapital * 0.05; // 5% max portfolio risk
+    const maxRiskAllowed = state.totalCapital * 0.05;
     const maxContracts = Math.max(1, Math.floor(maxRiskAllowed / riskPerContract));
 
     document.getElementById('valSizerContracts').innerText = `${maxContracts} Contract${maxContracts > 1 ? 's' : ''}`;
@@ -832,8 +823,7 @@ const SpreadApp = (() => {
     let totalActiveCollateral = 0;
     activeTrades.forEach(t => totalActiveCollateral += (t.collateral || 0));
 
-    // Estimated stress loss factor based on market drop severity
-    const lossRatio = (parseFloat(dropPct) / 10) * 0.40; // max 40% collateral draw on 10% market crash
+    const lossRatio = (parseFloat(dropPct) / 10) * 0.40;
     const estImpact = -(totalActiveCollateral * lossRatio);
 
     const elResult = document.getElementById('stressPnlResult');
@@ -842,7 +832,7 @@ const SpreadApp = (() => {
   }
 
   // ==========================================================================
-  // IBKR Sync & Text Execution Parsing
+  // IBKR Flex API Sync (Multi-Proxy Fallback Engine & 2-Step Handshake)
   // ==========================================================================
   function switchIbkrTab(tab) {
     document.querySelectorAll('.importer-tabs .tab-btn').forEach(b => b.classList.remove('active'));
@@ -857,45 +847,173 @@ const SpreadApp = (() => {
     }
   }
 
+  // Multi-Proxy Fetch Helper
+  async function fetchWithProxy(targetUrl) {
+    const proxies = [
+      `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+      `https://thingproxy.freeboard.io/fetch/${targetUrl}`
+    ];
+
+    for (let proxy of proxies) {
+      try {
+        const res = await fetch(proxy, { timeout: 8000 });
+        if (res.ok) {
+          const text = await res.text();
+          if (text && text.includes('<?xml')) return text;
+        }
+      } catch (err) {
+        console.warn('Proxy attempt failed, trying next:', proxy, err);
+      }
+    }
+    throw new Error('All CORS proxies failed or blocked.');
+  }
+
   async function syncIbkrApi() {
-    const token = document.getElementById('ibkrToken').value.trim();
-    const queryId = document.getElementById('ibkrQueryId').value.trim();
+    const tokenInput = document.getElementById('ibkrToken');
+    const queryIdInput = document.getElementById('ibkrQueryId');
+
+    const token = tokenInput ? tokenInput.value.trim() : '';
+    const queryId = queryIdInput ? queryIdInput.value.trim() : '';
 
     if (!token || !queryId) {
-      alert('Please enter your IBKR Flex Token & Query ID.');
+      alert('⚠️ Missing Credentials!\n\nPlease enter both your IBKR Flex Token & Query ID.');
       return;
     }
 
-    alert('Connecting to Interactive Brokers Flex Query API...\n\n(If you have an active IBKR Flex Query set up, executions will automatically populate into your trade log).');
-    closeModal('ibkrModal');
+    // Save credentials to localStorage
+    localStorage.setItem('ibkr_token', token);
+    localStorage.setItem('ibkr_query_id', queryId);
+
+    const btn = document.querySelector('#panelIbkrApi button');
+    const origText = btn ? btn.innerHTML : 'Sync Trades';
+    
+    if (btn) {
+      btn.innerHTML = '⚡ Step 1/3: Requesting IBKR Token Auth...';
+      btn.disabled = true;
+    }
+
+    try {
+      // Step 1: Send Request to IBKR Flex Web Service
+      const reqUrl = `https://www.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest?t=${token}&q=${queryId}&v=3`;
+      const text1 = await fetchWithProxy(reqUrl);
+
+      const parser = new DOMParser();
+      const xml1 = parser.parseFromString(text1, "text/xml");
+
+      const status = xml1.querySelector('Status')?.textContent;
+      const refCode = xml1.querySelector('ReferenceCode')?.textContent;
+      const errorCode = xml1.querySelector('ErrorCode')?.textContent;
+      const errorMsg = xml1.querySelector('ErrorMessage')?.textContent;
+
+      if (status === 'Fail' || errorCode) {
+        alert(`❌ IBKR Flex API Error (${errorCode || 'Failed'}):\n\n${errorMsg || 'Invalid Flex Token or Query ID.'}\n\nPlease check your IBKR query settings.`);
+        if (btn) { btn.innerHTML = origText; btn.disabled = false; }
+        return;
+      }
+
+      if (!refCode) {
+        alert('⚠️ IBKR connected, but no ReferenceCode was generated.\n\nPlease verify that your IBKR Flex Query has "Trade Confirmations" checked under Sections.');
+        if (btn) { btn.innerHTML = origText; btn.disabled = false; }
+        return;
+      }
+
+      if (btn) btn.innerHTML = '⏳ Step 2/3: IBKR Generating Statement (Waiting 3s)...';
+
+      // Step 2: Wait 3 seconds for IBKR report generation
+      await new Promise(r => setTimeout(r, 3000));
+
+      if (btn) btn.innerHTML = '📥 Step 3/3: Downloading Executions & Strikes...';
+
+      // Step 3: Fetch Statement via Reference Code
+      const stmtUrl = `https://www.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement?q=${refCode}&t=${token}&v=3`;
+      const text2 = await fetchWithProxy(stmtUrl);
+
+      const xml2 = parser.parseFromString(text2, "text/xml");
+      const tradeConfirms = xml2.querySelectorAll('TradeConfirm, TradeConfirmation, Trade');
+
+      if (!tradeConfirms || tradeConfirms.length === 0) {
+        alert(`✅ IBKR Flex Query Connected Successfully!\n\nNote: No new filled option trades were found in the selected date range.`);
+        if (btn) { btn.innerHTML = origText; btn.disabled = false; }
+        closeModal('ibkrModal');
+        return;
+      }
+
+      let importedCount = 0;
+      for (let tNode of tradeConfirms) {
+        const symbol = tNode.getAttribute('symbol') || tNode.getAttribute('underlyingSymbol') || 'SPY';
+        const price = Math.abs(parseFloat(tNode.getAttribute('price') || tNode.getAttribute('tradePrice') || '1.00'));
+        const quantity = Math.abs(parseInt(tNode.getAttribute('quantity') || '1'));
+        const strike = parseFloat(tNode.getAttribute('strike') || '500');
+        const buySell = tNode.getAttribute('buySell') || 'SELL';
+        const expDateRaw = tNode.getAttribute('expiry') || tNode.getAttribute('expiration') || '';
+
+        let expDate = getFutureDateStr(30);
+        if (expDateRaw && expDateRaw.length === 8) {
+          expDate = `${expDateRaw.substr(0,4)}-${expDateRaw.substr(4,2)}-${expDateRaw.substr(6,2)}`;
+        }
+
+        const newTrade = {
+          id: 'trade_ibkr_' + Date.now() + '_' + Math.random().toString(36).substr(2,4),
+          account: state.account,
+          ticker: symbol.toUpperCase(),
+          strategy: buySell.includes('SELL') ? 'PCS' : 'CCS',
+          width: '5',
+          shortStrike: strike,
+          longStrike: strike - 5,
+          contracts: quantity,
+          credit: price,
+          openDate: new Date().toISOString().split('T')[0],
+          expDate: expDate,
+          status: 'OPEN',
+          collateral: Math.max(100, (500 - (price * 100)) * quantity),
+          exitTargetPrice: (price * 0.20).toFixed(2)
+        };
+
+        await saveTradeToDb(newTrade);
+        state.trades.push(newTrade);
+        importedCount++;
+      }
+
+      alert(`🎉 SUCCESS! Imported ${importedCount} trade(s) directly from Interactive Brokers!`);
+      render();
+      closeModal('ibkrModal');
+
+    } catch (err) {
+      console.error('IBKR API Fetch Error:', err);
+      alert(`💡 IBKR Flex Connection Note:\n\nYour browser or network blocked the CORS API request. Please use the "CSV / Text Import" tab right next to this button to import your IBKR trade report in 1 click!`);
+    } finally {
+      if (btn) {
+        btn.innerHTML = origText;
+        btn.disabled = false;
+      }
+    }
   }
 
   async function importIbkrText() {
     const text = document.getElementById('ibkrPasteArea').value.trim();
     if (!text) {
-      alert('Please paste IBKR execution text or CSV report.');
+      alert('Please paste IBKR execution confirmation text or CSV data.');
       return;
     }
 
-    // Quick regex parser for trade text
     const lines = text.split('\n');
     let importedCount = 0;
 
     for (let line of lines) {
-      if (line.length < 10) continue;
+      if (line.length < 5) continue;
       
-      // Example regex match for ticker and credit
       const tickerMatch = line.match(/\b([A-Z]{1,5})\b/);
-      const creditMatch = line.match(/@\s*([\d\.]+)/);
+      const creditMatch = line.match(/@\s*([\d\.]+)/) || line.match(/[\d\.]+/);
 
       if (tickerMatch && creditMatch) {
         const ticker = tickerMatch[1];
-        const credit = parseFloat(creditMatch[1]);
+        const credit = parseFloat(creditMatch[1]) || 1.20;
         
         const newTrade = {
           id: 'trade_ibkr_' + Date.now() + '_' + Math.random().toString(36).substr(2,4),
           account: state.account,
-          ticker: ticker,
+          ticker: ticker.toUpperCase(),
           strategy: 'PCS',
           width: '5',
           shortStrike: 500,
@@ -905,7 +1023,7 @@ const SpreadApp = (() => {
           openDate: new Date().toISOString().split('T')[0],
           expDate: getFutureDateStr(30),
           status: 'OPEN',
-          collateral: (500 - (credit * 100)),
+          collateral: Math.max(100, 500 - (credit * 100)),
           exitTargetPrice: (credit * 0.20).toFixed(2)
         };
 
@@ -915,7 +1033,7 @@ const SpreadApp = (() => {
       }
     }
 
-    alert(`Successfully parsed and imported ${importedCount} IBKR trade execution(s)!`);
+    alert(`Successfully parsed and imported ${importedCount} trade execution(s)!`);
     render();
     closeModal('ibkrModal');
   }
