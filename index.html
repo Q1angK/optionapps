@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpreadPulse - Credit Spread & CSP Portfolio Suite</title>
+  <!-- Google Fonts: Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="dark-theme">
+  <!-- Top Global Header -->
+  <header class="app-header">
+    <div class="header-container">
+      <div class="brand-logo">
+        <div class="logo-icon"><i data-lucide="trending-up"></i></div>
+        <div class="logo-text">
+          <span class="app-title">SpreadPulse</span>
+          <span class="app-tagline">Credit Spread & CSP Terminal</span>
+        </div>
+      </div>
+      
+      <!-- Account Switcher & Header Controls -->
+      <div class="header-controls">
+        <div class="account-selector">
+          <i data-lucide="wallet"></i>
+          <select id="accountSelect" onchange="SpreadApp.switchAccount(this.value)">
+            <option value="main">IBKR Main Portfolio</option>
+            <option value="ira">Roth IRA Account</option>
+            <option value="paper">Paper Trading Account</option>
+          </select>
+        </div>
+        
+        <button class="btn btn-outline" onclick="SpreadApp.openModal('ibkrModal')">
+          <i data-lucide="refresh-cw"></i> IBKR Sync
+        </button>
+        
+        <button class="btn btn-primary" onclick="SpreadApp.openModal('tradeModal')">
+          <i data-lucide="plus-circle"></i> New Trade
+        </button>
+        
+        <button class="btn btn-icon" onclick="SpreadApp.openModal('settingsModal')" title="Settings & Database">
+          <i data-lucide="settings"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-content">
+    <!-- Executive Portfolio Metrics Bar -->
+    <section class="metrics-grid">
+      <!-- Total Realized P&L Card -->
+      <div class="metric-card glow-card" id="cardNetPnL">
+        <div class="card-header">
+          <span class="card-label">Total Realized P&L</span>
+          <span class="badge badge-success" id="badgePnlRoc">+0.0% ROC</span>
+        </div>
+        <div class="card-value-group">
+          <span class="card-value" id="valNetPnL">$0.00</span>
+          <span class="card-subtext" id="valTotalTrades">0 Trades Closed</span>
+        </div>
+      </div>
+
+      <!-- Win Rate & Win Streak Card -->
+      <div class="metric-card">
+        <div class="card-header">
+          <span class="card-label">Win Rate & Streak</span>
+          <span class="streak-pill" id="valWinStreak"><i data-lucide="flame"></i> 0 Streak</span>
+        </div>
+        <div class="card-value-group">
+          <span class="card-value" id="valWinRate">0.0%</span>
+          <span class="card-subtext" id="valWinLossCount">0 Wins / 0 Losses</span>
+        </div>
+      </div>
+
+      <!-- Active Capital at Risk Card -->
+      <div class="metric-card">
+        <div class="card-header">
+          <span class="card-label">Active Capital Risk</span>
+          <span class="badge badge-neutral" id="valCapUsagePct">0% Cap Used</span>
+        </div>
+        <div class="card-value-group">
+          <span class="card-value" id="valActiveCapital">$0</span>
+          <div class="progress-bar-container">
+            <div class="progress-bar" id="barCapUsage" style="width: 0%;"></div>
+          </div>
+          <span class="card-subtext" id="valCapLimit">of $25,000 Total Capital</span>
+        </div>
+      </div>
+
+      <!-- 80% Rule Efficiency Card -->
+      <div class="metric-card">
+        <div class="card-header">
+          <span class="card-label">80% Target Efficiency</span>
+          <span class="badge badge-purple" id="valEfficiencyTag">Optimal</span>
+        </div>
+        <div class="card-value-group">
+          <span class="card-value" id="valTargetEfficiency">0.0%</span>
+          <span class="card-subtext" id="valTargetHits">0 of 0 Wins @ 80% Exit</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main Workspace Grid: Active Trades & AI Coach -->
+    <div class="workspace-grid">
+      <!-- Left Column: Active & Closed Trades -->
+      <div class="table-container-card">
+        <!-- Tab Navigation Bar -->
+        <div class="tab-bar">
+          <div class="tab-group">
+            <button class="tab-btn active" id="tabBtnActive" onclick="SpreadApp.switchTab('active')">
+              <i data-lucide="clock"></i> Active Positions (<span id="countActive">0</span>)
+            </button>
+            <button class="tab-btn" id="tabBtnClosed" onclick="SpreadApp.switchTab('closed')">
+              <i data-lucide="check-circle-2"></i> Closed Trade History (<span id="countClosed">0</span>)
+            </button>
+            <button class="tab-btn" id="tabBtnAnalytics" onclick="SpreadApp.switchTab('analytics')">
+              <i data-lucide="bar-chart-3"></i> Strategy Matrix & Heatmap
+            </button>
+          </div>
+          
+          <div class="filter-controls" id="tableFilterControls">
+            <select id="filterType" onchange="SpreadApp.render()">
+              <option value="ALL">All Strategies</option>
+              <option value="PCS">$5/$10 Put Credit Spreads</option>
+              <option value="CCS">$5/$10 Call Credit Spreads</option>
+              <option value="CSP">Cash-Secured Puts (CSP)</option>
+            </select>
+            <input type="text" id="searchTicker" placeholder="Search Symbol..." oninput="SpreadApp.render()">
+          </div>
+        </div>
+
+        <!-- Active Positions View -->
+        <div class="view-panel active" id="viewActive">
+          <div class="table-wrapper">
+            <table class="data-table" id="tableActive">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Strategy</th>
+                  <th>Strikes / Width</th>
+                  <th>Contracts</th>
+                  <th>Credit Rec.</th>
+                  <th>Collateral Risk</th>
+                  <th>80% Target Price</th>
+                  <th>Exp Date (DTE)</th>
+                  <th>Quick Exit Actions</th>
+                </tr>
+              </thead>
+              <tbody id="tbodyActive">
+                <!-- Rows injected dynamically by app.js -->
+              </tbody>
+            </table>
+          </div>
+          <div class="empty-state" id="emptyActive" style="display: none;">
+            <i data-lucide="layers" class="empty-icon"></i>
+            <h3>No Active Positions</h3>
+            <p>Log a new $5/$10 Credit Spread or Cash-Secured Put, or click IBKR Sync!</p>
+            <button class="btn btn-primary" onclick="SpreadApp.openModal('tradeModal')">Log First Trade</button>
+          </div>
+        </div>
+
+        <!-- Closed Trade History View -->
+        <div class="view-panel" id="viewClosed">
+          <div class="table-wrapper">
+            <table class="data-table" id="tableClosed">
+              <thead>
+                <tr>
+                  <th>Close Date</th>
+                  <th>Symbol</th>
+                  <th>Strategy</th>
+                  <th>Credit Rec.</th>
+                  <th>Exit Price</th>
+                  <th>Net P&L ($)</th>
+                  <th>ROC (%)</th>
+                  <th>Outcome / Exit Tag</th>
+                  <th>Days Held</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="tbodyClosed">
+                <!-- Rows injected dynamically by app.js -->
+              </tbody>
+            </table>
+          </div>
+          <div class="empty-state" id="emptyClosed" style="display: none;">
+            <i data-lucide="history" class="empty-icon"></i>
+            <h3>No Closed History Yet</h3>
+            <p>Closed trades will appear here along with profit tracking stats.</p>
+          </div>
+        </div>
+
+        <!-- Analytics & Strategy Matrix View -->
+        <div class="view-panel" id="viewAnalytics">
+          <div class="analytics-grid">
+            <!-- Strategy Matrix Card -->
+            <div class="analytics-card">
+              <h3><i data-lucide="scale"></i> Strategy Efficiency Breakdown</h3>
+              <table class="matrix-table">
+                <thead>
+                  <tr>
+                    <th>Strategy</th>
+                    <th>Trades</th>
+                    <th>Win Rate %</th>
+                    <th>Total P&L</th>
+                    <th>Avg ROC %</th>
+                  </tr>
+                </thead>
+                <tbody id="tbodyMatrix">
+                  <!-- Populated by app.js -->
+                </tbody>
+              </table>
+            </div>
+
+            <!-- 80% Exit vs Expiration Comparator -->
+            <div class="analytics-card">
+              <h3><i data-lucide="git-compare"></i> 80% Exit Rule vs Expiration Test</h3>
+              <div class="comparator-box">
+                <div class="comp-stat">
+                  <span class="comp-label">Realized P&L (80% Exit Rule)</span>
+                  <span class="comp-val positive" id="compValRule">$0.00</span>
+                </div>
+                <div class="comp-divider">vs</div>
+                <div class="comp-stat">
+                  <span class="comp-label">Est. P&L (Held 100% to Expire)</span>
+                  <span class="comp-val" id="compValHold">$0.00</span>
+                </div>
+              </div>
+              <p class="comp-insight" id="compInsightText">Exiting at 80% target protects your win rate against late pullbacks.</p>
+            </div>
+          </div>
+
+          <!-- Monthly P&L Calendar Heatmap -->
+          <div class="heatmap-section">
+            <h3><i data-lucide="calendar"></i> Monthly Realized P&L Heatmap</h3>
+            <div class="heatmap-grid" id="heatmapGrid">
+              <!-- Heatmap tiles generated by app.js -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: AI Coach & Risk Tools -->
+      <aside class="sidebar-column">
+        <!-- AI Trade Coach Box -->
+        <div class="sidebar-card coach-card">
+          <div class="sidebar-header">
+            <i data-lucide="bot" class="coach-icon"></i>
+            <h3>AI Trade Coach Insights</h3>
+          </div>
+          <div class="coach-content" id="coachTips">
+            <!-- Insights dynamically injected -->
+          </div>
+        </div>
+
+        <!-- Market Drop Stress Tester Widget -->
+        <div class="sidebar-card">
+          <div class="sidebar-header">
+            <i data-lucide="shield-alert"></i>
+            <h3>Market Drop Stress Tester</h3>
+          </div>
+          <div class="stress-widget">
+            <label for="stressSlider">Simulate Market Drop: <span id="stressValue" class="highlight-val">-2.0%</span></label>
+            <input type="range" id="stressSlider" min="0" max="10" step="0.5" value="2" oninput="SpreadApp.calcStressTest(this.value)">
+            
+            <div class="stress-result-box">
+              <span class="stress-title">Estimated Open Spreads P&L Impact</span>
+              <span class="stress-pnl negative" id="stressPnlResult">-$0.00</span>
+              <span class="stress-sub" id="stressSubText">Based on current active collateral</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Trade Sizing Calculator Widget -->
+        <div class="sidebar-card">
+          <div class="sidebar-header">
+            <i data-lucide="calculator"></i>
+            <h3>Position Sizing Guardrail</h3>
+          </div>
+          <div class="sizer-form">
+            <div class="form-row">
+              <label>Target Width / Strategy</label>
+              <select id="sizerWidth" onchange="SpreadApp.calcPositionSizing()">
+                <option value="5">$5 Width Spread ($500)</option>
+                <option value="10">$10 Width Spread ($1000)</option>
+                <option value="csp">Cash-Secured Put (CSP)</option>
+              </select>
+            </div>
+            <div class="form-row" id="rowSizerPrice" style="display: none;">
+              <label>CSP Strike Price ($)</label>
+              <input type="number" id="sizerStrikePrice" value="50" oninput="SpreadApp.calcPositionSizing()">
+            </div>
+            <div class="sizer-result" id="sizerResult">
+              <span class="sizer-contracts">Max Recommended: <strong id="valSizerContracts">3 Contracts</strong></span>
+              <span class="sizer-note">Keeps trade risk under 5% of portfolio</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <!-- MODAL 1: New / Edit Trade Modal -->
+  <div class="modal-overlay" id="tradeModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="modalTradeTitle"><i data-lucide="plus-circle"></i> Log Trade Entry</h2>
+        <button class="modal-close" onclick="SpreadApp.closeModal('tradeModal')">&times;</button>
+      </div>
+      <form id="formTrade" onsubmit="SpreadApp.handleSaveTrade(event)">
+        <input type="hidden" id="tradeId">
+        
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="tradeTicker">Ticker Symbol *</label>
+            <input type="text" id="tradeTicker" placeholder="e.g. SPY, QQQ, NVDA" required style="text-transform: uppercase;">
+          </div>
+          
+          <div class="form-group">
+            <label for="tradeStrategy">Strategy Type *</label>
+            <select id="tradeStrategy" onchange="SpreadApp.onStrategyChange()" required>
+              <option value="PCS">Put Credit Spread (PCS)</option>
+              <option value="CCS">Call Credit Spread (CCS)</option>
+              <option value="CSP">Cash-Secured Put (CSP)</option>
+            </select>
+          </div>
+
+          <div class="form-group" id="grpWidth">
+            <label for="tradeWidth">Strike Width ($) *</label>
+            <select id="tradeWidth" onchange="SpreadApp.onWidthChange()">
+              <option value="5">$5 Width ($500 base risk)</option>
+              <option value="10">$10 Width ($1000 base risk)</option>
+              <option value="custom">Custom Width</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="tradeShortStrike">Short Strike ($) *</label>
+            <input type="number" step="0.5" id="tradeShortStrike" placeholder="e.g. 500" required oninput="SpreadApp.updateTradePreview()">
+          </div>
+
+          <div class="form-group" id="grpLongStrike">
+            <label for="tradeLongStrike">Long Strike ($)</label>
+            <input type="number" step="0.5" id="tradeLongStrike" placeholder="e.g. 495" oninput="SpreadApp.updateTradePreview()">
+          </div>
+
+          <div class="form-group">
+            <label for="tradeContracts">Contracts Qty *</label>
+            <input type="number" id="tradeContracts" value="1" min="1" required oninput="SpreadApp.updateTradePreview()">
+          </div>
+
+          <div class="form-group">
+            <label for="tradeCredit">Credit Received / Contract ($) *</label>
+            <input type="number" step="0.01" id="tradeCredit" placeholder="e.g. 1.20" required oninput="SpreadApp.updateTradePreview()">
+          </div>
+
+          <div class="form-group">
+            <label for="tradeExpDate">Expiration Date *</label>
+            <input type="date" id="tradeExpDate" required onchange="SpreadApp.updateTradePreview()">
+          </div>
+        </div>
+
+        <!-- Calculated Live Preview Box -->
+        <div class="preview-box">
+          <div class="prev-item">
+            <span class="prev-lbl">Max Profit:</span>
+            <span class="prev-val positive" id="prevMaxProfit">$0.00</span>
+          </div>
+          <div class="prev-item">
+            <span class="prev-lbl">Collateral Risk:</span>
+            <span class="prev-val negative" id="prevCollateral">$0.00</span>
+          </div>
+          <div class="prev-item">
+            <span class="prev-lbl">🎯 80% Exit Buyback Target:</span>
+            <span class="prev-val highlight" id="prevExitTarget">$0.00 / contract</span>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-outline" onclick="SpreadApp.closeModal('tradeModal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Trade to Ledger</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 2: IBKR Sync & CSV Importer Modal -->
+  <div class="modal-overlay" id="ibkrModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><i data-lucide="refresh-cw"></i> IBKR Flex API & CSV Importer</h2>
+        <button class="modal-close" onclick="SpreadApp.closeModal('ibkrModal')">&times;</button>
+      </div>
+      
+      <div class="importer-tabs">
+        <button class="tab-btn active" id="btnIbkrTabApi" onclick="SpreadApp.switchIbkrTab('api')">IBKR Flex API Token</button>
+        <button class="tab-btn" id="btnIbkrTabCsv" onclick="SpreadApp.switchIbkrTab('csv')">CSV / Text Import</button>
+      </div>
+
+      <!-- API Tab -->
+      <div class="importer-panel active" id="panelIbkrApi">
+        <p class="form-help">Enter your free <strong>IBKR Flex Web Service Token</strong> & <strong>Query ID</strong> from IBKR Account Management to sync trades automatically.</p>
+        <div class="form-group">
+          <label>IBKR Flex Token</label>
+          <input type="password" id="ibkrToken" placeholder="Paste IBKR Flex Token...">
+        </div>
+        <div class="form-group">
+          <label>Flex Query ID</label>
+          <input type="text" id="ibkrQueryId" placeholder="e.g. 123456">
+        </div>
+        <button class="btn btn-primary full-width" onclick="SpreadApp.syncIbkrApi()">
+          <i data-lucide="cloud-download"></i> Sync Trades from Interactive Brokers
+        </button>
+      </div>
+
+      <!-- CSV / Text Tab -->
+      <div class="importer-panel" id="panelIbkrCsv">
+        <p class="form-help">Paste IBKR execution confirmation text or import an IBKR CSV report.</p>
+        <div class="form-group">
+          <label>Paste Trade Execution Text</label>
+          <textarea id="ibkrPasteArea" rows="5" placeholder="BOT 1 SPY 100 20 SEP 26 500 PUT / SOLD 1 SPY 100 20 SEP 26 495 PUT @ 1.20"></textarea>
+        </div>
+        <button class="btn btn-primary full-width" onclick="SpreadApp.importIbkrText()">
+          Parse & Import Executions
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 3: Close / Exit Trade Action Modal -->
+  <div class="modal-overlay" id="closeModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><i data-lucide="check-circle-2"></i> Close Position</h2>
+        <button class="modal-close" onclick="SpreadApp.closeModal('closeModal')">&times;</button>
+      </div>
+      <form id="formCloseTrade" onsubmit="SpreadApp.handleConfirmCloseTrade(event)">
+        <input type="hidden" id="closeTradeId">
+        <div class="trade-summary-card" id="closeTradeSummary">
+          <!-- Summary inserted dynamically -->
+        </div>
+
+        <div class="form-group">
+          <label for="closeExitPrice">Buy-to-Close Cost per Contract ($)</label>
+          <input type="number" step="0.01" id="closeExitPrice" required oninput="SpreadApp.calcClosePnL()">
+          <span class="field-hint" id="closeExitHint">Auto-filled based on your 80% target rule ($0.20 remaining)</span>
+        </div>
+
+        <div class="form-group">
+          <label for="closeExitReason">Exit Reason / Tag</label>
+          <select id="closeExitReason">
+            <option value="BUYBACK_80_PERCENT">🎯 80% Profit Target Hit</option>
+            <option value="EXPIRED_MAX_PROFIT">⌛ Expired OTM (100% Profit)</option>
+            <option value="ASSIGNED">📌 Assigned Stock (CSP)</option>
+            <option value="MANUAL_CLOSE">✋ Manual Close / Target Adjusted</option>
+            <option value="STOPPED_OUT">🛑 Stopped Out (Risk Cap)</option>
+          </select>
+        </div>
+
+        <div class="close-pnl-preview">
+          <span>Realized Net P&L:</span>
+          <span class="pnl-amount positive" id="valCloseNetPnL">$0.00 (+0.0% ROC)</span>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-outline" onclick="SpreadApp.closeModal('closeModal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Confirm Exit & Record Gains</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 4: Settings & Database Management -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2><i data-lucide="settings"></i> Portfolio & Database Settings</h2>
+        <button class="modal-close" onclick="SpreadApp.closeModal('settingsModal')">&times;</button>
+      </div>
+      
+      <div class="settings-section">
+        <h3><i data-lucide="wallet"></i> Total Portfolio Account Capital</h3>
+        <div class="form-group">
+          <label for="settingTotalCap">Total Account Balance ($)</label>
+          <input type="number" id="settingTotalCap" value="25000" step="1000" onchange="SpreadApp.saveSettings()">
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3><i data-lucide="hard-drive"></i> Backup & Database Options</h3>
+        <p class="form-help">Trades are saved automatically in your browser's persistent database (IndexedDB).</p>
+        <div class="btn-group-horizontal">
+          <button class="btn btn-outline" onclick="SpreadApp.exportJsonBackup()">
+            <i data-lucide="download"></i> Export JSON Backup
+          </button>
+          <button class="btn btn-outline" onclick="document.getElementById('importFile').click()">
+            <i data-lucide="upload"></i> Import JSON Backup
+          </button>
+          <input type="file" id="importFile" accept=".json" style="display:none;" onchange="SpreadApp.importJsonBackup(event)">
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <h3><i data-lucide="cloud"></i> Optional Google Sheets Sync</h3>
+        <div class="form-group">
+          <label>Google AppsScript Web App URL (Optional)</label>
+          <input type="url" id="settingGscriptUrl" placeholder="https://script.google.com/macros/s/.../exec" onchange="SpreadApp.saveSettings()">
+        </div>
+      </div>
+
+      <div class="settings-section danger-zone">
+        <h3>Danger Zone</h3>
+        <button class="btn btn-danger" onclick="SpreadApp.clearAllData()">
+          <i data-lucide="trash-2"></i> Reset & Clear All Trade Ledger Data
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
